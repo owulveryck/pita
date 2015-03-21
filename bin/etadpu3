@@ -1,0 +1,128 @@
+#!/bin/bash
+
+## Check tool for the SVN repository
+## Author: Olivier Wulveryck
+## Date: Mon Jan 28 10:42:10 EST 2008
+## Version: 0.1
+
+##  ######################################
+##  ######################################
+##  
+##  #     #
+##  #     #    ##    #####    ####
+##  #     #   #  #   #    #  #
+##  #     #  #    #  #    #   ####
+##   #   #   ######  #####        #
+##    # #    #    #  #   #   #    #
+##     #     #    #  #    #   ####
+##  
+##  ######################################
+##  ######################################
+
+host=$1
+DEBUG=$2
+MYPID=$$
+TMPDIR=/tmp/CHECK-$MYPID
+SVNROOT=file:///localhost/usr/local/references/pitarepo/
+
+usage()
+{
+        cat << EOF
+usage: $0 host file1 [file2 file3 ...]
+        put the specitifed files in the repository $SVNROOT 
+EOF
+	exit 1
+}
+
+DEBUG=false
+FORCE=false
+while getopts :r:fd OPTION
+do
+	case "$OPTION" in
+		d)
+			DEBUG=true
+			;;
+		f)
+			FORCE=true
+			;;
+		r)
+			RELEASE=$OPTARG
+			if [[ "_$RELEASE" != "_BETA" && "_$RELEASE" != "_RELEASE" ]]
+			then
+				usage
+				exit 1
+			fi
+			;;
+		h)
+			usage
+			exit
+			;;
+		:) 
+			echo "option $OPTARG requires an argument"
+			exit 5
+			;;
+		\?)
+			echo "Incorrect option... "
+			exit 3
+			;;
+	esac
+done
+shift $((OPTIND-1)) 
+host=$1
+shift
+FILESTOUPDATE=$@
+
+if [ "_$host" == "_" ]
+then
+	usage
+	exit 1
+fi
+
+##  ######################################
+##  ######################################
+##  
+##   #    #    ##       #    #    #
+##   ##  ##   #  #      #    ##   #
+##   # ## #  #    #     #    # #  #
+##   #    #  ######     #    #  # #
+##   #    #  #    #     #    #   ##
+##   #    #  #    #     #    #    #
+##  
+##  ######################################
+##  ######################################
+
+ARCHIVE="SVNBCK-$(date +%s).tar"
+## Now working on remote host
+(
+        # This is to export the current variables in the remote shell
+	echo "FILESTOUPDATE=\"$FILESTOUPDATE\""
+        echo "TMPDIR=$TMPDIR"
+        echo "PACKAGES=$PACKAGES"
+        echo "DEBUG=$DEBUG"
+        echo "ARCHIVE=/var/tmp/$ARCHIVE"
+        # the leading \ is to avoid interpretation by the current shell
+        # Everything in between the EOF is executed as-is on the remote host
+        cat << \EOF
+		touch $ARCHIVE
+		mkdir -p $TMPDIR
+                cd $TMPDIR
+		for file in $FILESTOUPDATE
+		do
+			# get perms
+			LINK=$(ls -ald $file | awk '{print $11}' 2>/dev/null)
+			OWNER=$(stat -c '%u' $file)	
+			GROUP=$(stat -c '%g' $file)	
+			PERMS=$(stat -c '%a' $file)
+			TYPE=$(stat -c '%F' $file | sed 's/empty //')
+			CSUM=$(test -f $file && md5sum $file | awk '{print $1}' 2>/dev/null)
+			echo "<property file='$file'>"
+			echo "	<owner>$OWNER</owner>"
+			echo "	<group>$GROUP</group>"
+			echo "	<permissions>$PERMS</permissions>"
+			echo "	<type>$TYPE</type>"
+			echo "	<checksum>$CSUM</checksum>"
+			echo "	<link>$LINK</link>"
+			echo "</property>"
+		done
+EOF
+) | /usr/bin/ssh root@${host}-bck /usr/bin/ksh

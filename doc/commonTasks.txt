@@ -1,0 +1,121 @@
+Pre-requisites
+==============
+
+A svn repository with two modules
+hosts
+templates
+
+every machine must have an entry in the module hosts. 
+e.g. machine1 must be directory hosts/machine1
+
+We do mirror the filesystem tree under a root/ subdirectory in the machine1.
+e.g. hosts/machine1/root/etc/motd
+
+Principles
+==========
+There cannot be a multiple definition of a file in different templates. Eg: /etc/motd cannot be defined in a template unix and in a template linux, we use modular files for that
+A file can be defined in a template and in a host (called a per-host definition). In this case, the per-host definition will be the one that will be used.
+
+within a template or a host a special /config/config.xml may contain defitinions in the format:
+<definitions>
+	<param>value</param>
+	<param2>value</param2>
+</definitions>
+
+where param can be ANYTHING.
+
+eg:
+
+hosts/machine/config/config.xml 
+<definitions>
+	<ip>192.168.0.1</ip>
+	<hostname>myname</hostname>
+</definitions>
+
+Thoses files may be used by  any module for substitution.
+Therefore every module must be able to understand and read thoses definitions.
+
+Common part
+===========
+
+0) Load modules
+---------------
+
+and get a list of available modules in MODULES
+
+I) Extract
+----------
+
+1) mkdir TMPDIR TMPDIR/hosts TMPDIR/templates
+2) extract hosts from referentiel in TMPDIR/hosts/machine
+3) find all "profiles"
+	-> svn get properties profile TMPDIR/hosts/machine
+4) extract all physical profiles in TMPDIR/templates/
+
+II) Generating the manifest.xml
+-------------------------------
+
+5) Generate a manifest of all the files to be updates
+
+(
+	For all template in profiles
+	do
+		echo "<template name=$template>"
+		For all files in TMPDIR/templates/$template/*
+		do
+			svn get property properties $file
+		done
+		echo "</template>"
+	done
+	For all files in TMPDIR/hosts/machine/*
+	do
+		echo "<host>"
+		svn get property properties $file
+		echo "</host>"
+	done
+) > TMPDIR/sandbox/manifest.xml
+
+6) generate a global config.xml
+(
+	For all template in TMPDIR/templates/*
+	do
+		echo "<template name=$template>"
+		cat $template/config/config.xml
+		echo "</template>"
+	done
+	For all files in TMPDIR/hosts/machine/*
+	do
+		echo "<host>"
+		cat $host/config/config.xml
+		echo "</host>"
+	done
+) > TMPDIR/sandbox/config/config.xml
+
+
+III) Sandbox population
+-----------------------
+
+6) check that there is no conflicted file
+Check if template/file@name is defined twice, if so exit and display an error: incompatibles templates found
+
+check is template/file@name and host/file@name are defined, if so, display a warning
+
+7) Apply modules...
+
+for each file in manifest that has a <module> tag
+do
+	apply module <module>
+done
+
+8) populate the sandbox
+
+foreach file in template/file@name
+do
+	cp TMPDIR/template/$template/root/$file TMPDIR/sandbox/root/
+done
+foreach file in host/file@name
+do
+	cp TMPDIR/host//root/$file TMPDIR/sandbox/root/
+done
+
+

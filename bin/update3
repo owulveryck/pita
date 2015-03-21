@@ -1,0 +1,193 @@
+#!/bin/bash
+
+## Check tool for the SVN repository
+## Author: Olivier Wulveryck
+## Date: Mon Jan 28 10:42:10 EST 2008
+## Version: 0.1
+
+##  ######################################
+##  ######################################
+##  
+##  #     #
+##  #     #    ##    #####    ####
+##  #     #   #  #   #    #  #
+##  #     #  #    #  #    #   ####
+##   #   #   ######  #####        #
+##    # #    #    #  #   #   #    #
+##     #     #    #  #    #   ####
+##  
+##  ######################################
+##  ######################################
+
+host=$1
+DEBUG=$2
+MYPID=$$
+TMPDIR=/tmp/CHECK-$MYPID
+SVNROOT=svn+ssh://localhost/usr/local/references/pitarepo/
+PACKAGES=0 # Do not check packages
+BASEDIR=/HOME/layon/sandbox/pita2
+
+usage()
+{
+	echo -n "Updating the all platform."
+	sleep 1 ; echo -n "."
+	sleep 1 ; echo -n "."
+	echo "Just kidding!"
+	echo ""
+        cat << EOF
+usage: $0 [-d] [-f] host [file1 file2 file3 ...]
+        update hosts with files from the $SVNROOT repository
+	-d is for debug mode
+	-f to force the update even if the machine is locked
+	if files are specified, just update the so called files (with absolute path)
+EOF
+	exit 1
+}
+
+DEBUG=false
+FORCE=false
+while getopts :r:fd OPTION
+do
+	case "$OPTION" in
+		d)
+			DEBUG=true
+			;;
+		f)
+			FORCE=true
+			;;
+		r)
+			RELEASE=$OPTARG
+			if [[ "_$RELEASE" != "_BETA" && "_$RELEASE" != "_RELEASE" ]]
+			then
+				usage
+				exit 1
+			fi
+			;;
+		h)
+			usage
+			exit
+			;;
+		:) 
+			echo "option $OPTARG requires an argument"
+			exit 5
+			;;
+		\?)
+			echo "Incorrect option... "
+			exit 3
+			;;
+	esac
+done
+shift $((OPTIND-1)) 
+host=$1
+shift
+FILESTOUPDATE=$@
+
+if [ "_$host" == "_" ]
+then
+	usage
+	exit 1
+fi
+
+##  ######################################
+##  ######################################
+##  
+##   #    #    ##       #    #    #
+##   ##  ##   #  #      #    ##   #
+##   # ## #  #    #     #    # #  #
+##   #    #  ######     #    #  # #
+##   #    #  #    #     #    #   ##
+##   #    #  #    #     #    #    #
+##  
+##  ######################################
+##  ######################################
+
+source $BASEDIR/lib/pita_lib_delivery_check.sh
+source $BASEDIR/lib/pita_lib_delivery_export_rep.sh
+if [[ -f $TMPDIR/hosts/$host/lock && $FORCE == false ]]
+then
+	echo "[$host] Machine is locked! (force: $FORCE)"
+	exit 1
+fi
+ARCHIVE="SVNBCK-$(date +%s).tar"
+## Now working on remote host
+(
+        # This is to export the current variables in the remote shell
+	echo "FILESTOUPDATE=\"$FILESTOUPDATE\""
+        echo "TMPDIR=$TMPDIR"
+        echo "PACKAGES=$PACKAGES"
+        echo "DEBUG=$DEBUG"
+        echo "ARCHIVE=/var/tmp/$ARCHIVE"
+        # the leading \ is to avoid interpretation by the current shell
+        # Everything in between the EOF is executed as-is on the remote host
+        cat << \EOF
+		touch $ARCHIVE
+                cd $TMPDIR
+		$DEBUG && ECHO="echo" || ECHO=""
+                echo "[Working in $(hostname):$TMPDIR]"
+		echo "[$(hostname)] Archive: $ARCHIVE"
+		
+		OS=$(uname -s)
+		INSTALL=$(which install 2>/dev/null)
+		for file in $FILESTOUPDATE
+		do
+			egrep "[ 	]+$file$|[ 	]+$file[ 	]" perm.conf >> perm.conf2
+		done
+		if [ "_$FILESTOUPDATE" != "_" ]
+		then
+			mv perm.conf2 perm.conf
+		fi
+		cat perm.conf | while read perm uid gid file arrow link
+                do
+			eval $(echo $perm | sed 's/\(.\)\(.........\)/type=\1;perm=\2/')
+			chmod=$(echo $perm | sed 's/\(...\)\(...\)\(...\)/u=\1,g=\2,o=\3/' | sed 's/-//g')
+			if [ "_$type" == "_d" ]
+			then
+                                $ECHO mkdir -p $file
+				$ECHO chown $uid:$gid $file
+				$ECHO chmod $chmod $file
+			elif [[ "_$type" == "_l" && "_$link" != "_" ]]
+			then
+				if [[ -d $file ]]
+				then	
+					if [[ -h $file ]]
+					then
+						rm $file && ln -sf $link $file
+					else
+						$ECHO ln -sf $link $(dirname $file)
+					fi
+				else
+					$ECHO ln -sf $link $file
+				fi                        
+			else
+				$ECHO tar -uf $ARCHIVE $file 2>/dev/null
+				if [[ "_$INSTALL" == "_" || "_$OS" != "_Linux" || "$_RELEASE" != "_" ]]
+				then
+					$ECHO cp $TMPDIR/root$file $(dirname $file)
+					$ECHO chown $uid:$gid $file
+					$ECHO chmod $chmod $file
+				else
+					$ECHO $INSTALL -C -m $chmod -g $gid -o $uid $TMPDIR/root$file $(dirname $file)
+				fi
+                        fi
+                done
+		pwconv
+                ## CLEANUP
+		cd /tmp
+		date > /etc/updated
+		cat $TMPDIR/perm.conf >> /etc/updated
+                test -d $TMPDIR && rm -rf $TMPDIR
+EOF
+) | /usr/bin/ssh root@${host}-bck /usr/bin/ksh
+
+echo "[$(hostname)] Now archiving old conf...]"
+mkdir -p ~/svn/archive/${host}/root
+cd ~/svn/archive/${host}/root
+scp root@${host}-bck:/var/tmp/$ARCHIVE /tmp/$ARCHIVE > /dev/null 2>/dev/null
+tar xf /tmp/$ARCHIVE 2>/dev/null && rm /tmp/$ARCHIVE
+cd ~/svn/archive/ && svn add --force ${host}  2>/dev/null >/dev/null
+#cd ~/svn/archive/${host}/root && find . -exec svn add {} \; > /dev/null 2>/dev/null
+svn commit -m"Archivage de $(date)" ~/svn/archive/${host} > /dev/null 2>/dev/null
+
+## CLEANUP
+cd /tmp
+test -d $TMPDIR && rm -rf $TMPDIR

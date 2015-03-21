@@ -1,0 +1,228 @@
+#!/bin/bash 
+
+## Check tool for the SVN repository
+## Author: Olivier Wulveryck
+## Version: 0.1
+
+##  ######################################
+##  ######################################
+##  
+##  #     #
+##  #     #    ##    #####    ####
+##  #     #   #  #   #    #  #
+##  #     #  #    #  #    #   ####
+##   #   #   ######  #####        #
+##    # #    #    #  #   #   #    #
+##     #     #    #  #    #   ####
+##  
+##  ######################################
+##  ######################################
+
+MYPID=$$
+TMPDIR=/tmp/CHECK-$MYPID
+SVNROOT=file:///localhost/usr/local/references/pitarepo/
+BASEDIR=/HOME/layon/pita3
+MANIFEST=$TMPDIR/xml/manifest.xml
+CHECKSCRIPT=$TMPDIR/scripts/checkScript.sh
+SABLOTRON=/usr/bin/sabcmd
+DEBUG=true
+
+test $DEBUG && echo "<debug>BASEDIR=$BASEDIR</debug>"
+test $DEBUG && echo "<debug>SVNROOT=$SVNROOT</debug>"
+test $DEBUG && echo "<debug>TMPDIR=$TMPDIR</debug>"
+
+usage()
+{
+        cat << EOF
+usage: $0 [-t SVNROOT] host [-s]
+        checks if files on host differ from files in SVNROOT
+        by default SVNROOT=$SVNROOT
+        if -t is specified SVNROOT is used instead of $SVNROOT
+	if -s is specified, display file even if remote is the same
+EOF
+
+}
+SAME=false
+while getopts :t:r:s OPTION
+do
+	case "$OPTION" in
+		t)
+			SVNROOT=$OPTARG
+			;;
+		r)
+			RELEASE=$OPTARG
+			if [[ "_$RELEASE" != "_BETA" && "_$RELEASE" != "_RELEASE" ]]
+			then
+				usage
+				exit 1
+			fi
+			;;
+		s)
+			SAME=true
+			;;
+		h)
+			usage
+			exit
+			;;
+		:) 
+			echo "option $OPTARG requires an argument"
+			exit 5
+			;;
+		\?)
+			echo "Incorrect option... "
+			exit 3
+			;;
+	esac
+done
+shift $((OPTIND-1)) 
+
+host=$1
+
+if [ "_$host" == "_" ]
+then
+	usage
+	exit 1
+fi
+##  ######################################
+##  ######################################
+##  
+##   #    #    ##       #    #    #
+##   ##  ##   #  #      #    ##   #
+##   # ## #  #    #     #    # #  #
+##   #    #  ######     #    #  # #
+##   #    #  #    #     #    #   ##
+##   #    #  #    #     #    #    #
+##  
+##  ######################################
+##  ######################################
+
+
+source $BASEDIR/lib/libCreateSandbox.sh
+# now generate the shellScript that will be used to check
+test $DEBUG && echo "<debug>Generating the check shell script ($CHECKSCRIPT)</debug>"
+echo "<action>Generation Shell script $CHECKSCRIPT<action>"
+$SABLOTRON $BASEDIR/xsl/properties2shellCheck.xsl $MANIFEST > $CHECKSCRIPT
+exit
+
+
+
+
+
+source $BASEDIR/lib/pita_lib_delivery_export_rep.sh
+## Now working on remote host
+(
+	# This is to export the current variables in the remote shell
+	echo "TMPDIR=$TMPDIR"
+	echo "PACKAGES=$PACKAGES"
+	echo "SAME=$SAME"
+	echo "m4=\"$m4\""
+	# the leading \ is to avoid interpretation by the current shell
+	# Everything in between the EOF is executed as-is on the remote host
+	cat << \EOF
+		DIFF=0
+		echo "[$(hostname)] => check"
+		echo "[$(hostname)] ==> files"
+		# colors
+		red='\033[1;31m'
+		NC='\033[m' # No Color
+		cd $TMPDIR
+#               echo "[Working in $(hostname):$TMPDIR]"
+		# if /etc/updated exists, check its date...
+		OS=$(uname)
+		if [[ -e /etc/updated && "_$OS" == "_Linux" ]]
+		then
+			UPDATED=$(date --date="$(ls -alnd  --full-time -c /etc/updated | awk '{print $6" "$7}')" "+%s")
+		else
+			UPDATED=$(date "+%s")
+		fi
+		cp perm.conf /tmp/check-perm.conf
+		cat perm.conf | while read perm uid gid file arrow link
+		do
+			if [ ! -e $file ]
+			then
+				echo "[$file] No remote file available for comparison"
+			else
+				# Check the plateform
+				if [ "_$OS" == "_Linux" ]
+				then
+					ECHO=echo
+					eval $(ls -lnd $file | awk '{print "PERM="$1";FUID="$3";FGID="$4";FILE="$9";LINK="$11}')
+					UPDATEDFILE=$(date --date="$(ls -alnd  --full-time -c $file | awk '{print $6" "$7}')" "+%s")
+				else
+					ECHO=/usr/ucb/echo
+					eval $(ls -lnd $file | awk '{print "PERM="$1";FUID="$3";FGID="$4";FILE="$9";LINK="$11}')
+					UPDATEDFILE=0
+				fi
+				# Separate type from PERM (i mean 'drwx------' will be 'd rwx------')
+				eval $(echo $PERM | sed 's/\(.\)\(.........\)/TYPE=\1;PERM=\2/')
+				eval $(echo $perm | sed 's/\(.\)\(.........\)/type=\1;perm=\2/')
+				if  [[ ! "_$FUID" == "_$iud" && ! "_$FGID" == "_$gid" ]]
+				then
+					$ECHO "[$file] Owner is not the same (is $FUID:$FGID and will be $uid:$gid)"
+					DIFF=$(expr $DIFF + 1)
+				fi
+				if [ "_$PERM" != "_$perm" ]
+				then
+					$ECHO "[$file] File permissions differs (is $PERM and will be $perm)"
+					DIFF=$(expr $DIFF + 1)
+				fi
+				if [ "_$TYPE" != "_$type" ]
+				then
+					$ECHO "[$file] It was a type '$type' and will be a '$TYPE'"
+					DIFF=$(expr $DIFF + 1)
+				fi
+				if [ "_$LINK" != "_$link" ]
+				then
+					$ECHO "[$file] file was linked on $LINK and will be linked on $link"
+					DIFF=$(expr $DIFF + 1)
+				fi
+				## Pwah, two time diff, it forks, it is ugly, to be changed!
+				if [[ -f $file && -f $TMPDIR/root$file || -h $TMPDIR/root$file ]]
+				then
+					diff $file $TMPDIR/root$file > /dev/null > /dev/null
+					#diff <(sort $file) <(sort $TMPDIR/root$file) > /dev/null
+					if [ $? -eq 0 ]
+					then
+						[ "$SAME" = "true" ] && echo "[$file] is the same"
+					else
+						DIFF=$(expr $DIFF + 1)
+						$ECHO -n "[$file] differs... "
+						if [ $UPDATEDFILE -gt $(expr $UPDATED + 60 ) ]
+						then
+							echo -e "WARNING: file on server is more recent"
+							COL=$red
+						else
+							echo ""
+							COL=""
+						fi
+						cat $file > $TMPDIR/filetmp1
+						cat $TMPDIR/root$file > $TMPDIR/filetmp2
+						$ECHO -ne "  ${COL}Server file${NC}                                              "
+						$ECHO  "|  Repository"
+						$ECHO -n "-----------------------------------------------------------"
+						$ECHO "+--------------------------------------------------------------"
+						if [ "_$OS" == "_Linux" ]
+						then
+							sdiff -w 120 -s <(sort $TMPDIR/filetmp1) <(sort $TMPDIR/filetmp2)
+						else
+							diff -s <(sort $TMPDIR/filetmp1) <(sort $TMPDIR/filetmp2)
+						fi
+						echo ; echo ; echo
+					fi
+				else
+					 [ "$SAME" = "true" ] && echo "[$file] exists $arrow $link"
+				fi
+			fi
+		done
+		## CLEANUP
+		echo "[$(hostname)] Cleaning up"
+		cd /tmp
+		rm -rf $TMPDIR
+		exit $DIFF
+EOF
+) | /usr/bin/ssh root@${host}-bck /usr/bin/ksh
+RES=$?
+## CLEANUP
+cd /tmp
+rm -rf $TMPDIR
+exit $RES
